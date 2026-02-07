@@ -22,20 +22,20 @@ import {
   Receipt,
   ClipboardList,
   RefreshCw,
+  Activity,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import {
   parseGameMetricReport,
   parseRedemptionReport,
   parseAuditReport,
-  type GameMetric,
-  type RedemptionDetail,
-  type AuditRecord,
+  parseDashboardReport,
 } from '@/lib/csv/parsers';
 import {
   saveGameMetrics,
   saveRedemptions,
   saveAuditRecords,
+  saveDashboardRecords,
   getDataStoreStats,
   clearAllData,
   type DataStoreStats,
@@ -43,7 +43,7 @@ import {
 
 interface ImportResult {
   filename: string;
-  type: 'game-metrics' | 'redemptions' | 'audit' | 'unknown';
+  type: 'game-metrics' | 'redemptions' | 'audit' | 'dashboard' | 'unknown';
   recordCount: number;
   status: 'success' | 'error';
   message: string;
@@ -60,17 +60,26 @@ export default function DataImportPage() {
     setStats(getDataStoreStats());
   }, []);
 
-  const detectReportType = (content: string): 'game-metrics' | 'redemptions' | 'audit' | 'unknown' => {
+  const detectReportType = (content: string, headers: string): 'game-metrics' | 'redemptions' | 'audit' | 'dashboard' | 'unknown' => {
+    // Check for combined dashboard report first (has record_type column)
+    const headerLower = headers.toLowerCase();
+    if (headerLower.includes('record_type') && headerLower.includes('card_number')) {
+      return 'dashboard';
+    }
+    
+    // Check for standard Semnox reports
     if (content.includes('Game Metric Report')) return 'game-metrics';
     if (content.includes('Redemption Tickets Details Report')) return 'redemptions';
     if (content.includes('Master Audit Report')) return 'audit';
+    
     return 'unknown';
   };
 
   const processFile = async (file: File): Promise<ImportResult> => {
     try {
       const content = await file.text();
-      const reportType = detectReportType(content);
+      const firstLine = content.split('\n')[0] || '';
+      const reportType = detectReportType(content, firstLine);
 
       if (reportType === 'unknown') {
         return {
@@ -78,7 +87,7 @@ export default function DataImportPage() {
           type: 'unknown',
           recordCount: 0,
           status: 'error',
-          message: 'Unknown report format. Please upload a valid Semnox CSV report.',
+          message: 'Unknown report format. Upload a Semnox CSV or Combined Dashboard Report.',
         };
       }
 
@@ -100,6 +109,12 @@ export default function DataImportPage() {
         case 'audit': {
           const data = parseAuditReport(content);
           saveAuditRecords(data);
+          recordCount = data.length;
+          break;
+        }
+        case 'dashboard': {
+          const data = parseDashboardReport(content);
+          saveDashboardRecords(data);
           recordCount = data.length;
           break;
         }
@@ -181,6 +196,8 @@ export default function DataImportPage() {
         return <Receipt className="h-4 w-4" />;
       case 'audit':
         return <ClipboardList className="h-4 w-4" />;
+      case 'dashboard':
+        return <Activity className="h-4 w-4" />;
       default:
         return <FileSpreadsheet className="h-4 w-4" />;
     }
@@ -194,10 +211,17 @@ export default function DataImportPage() {
         return 'Redemptions';
       case 'audit':
         return 'Audit Log';
+      case 'dashboard':
+        return 'Combined Dashboard';
       default:
         return 'Unknown';
     }
   };
+
+  const totalRecords = (stats?.gameMetricsCount || 0) + 
+    (stats?.redemptionsCount || 0) + 
+    (stats?.auditRecordsCount || 0) +
+    (stats?.dashboardRecordsCount || 0);
 
   return (
     <div className="p-8 space-y-8">
@@ -220,7 +244,7 @@ export default function DataImportPage() {
       </div>
 
       {/* Data Stats */}
-      <div className="grid gap-4 md:grid-cols-3">
+      <div className="grid gap-4 md:grid-cols-4">
         <Card>
           <CardContent className="p-6">
             <div className="flex items-center gap-4">
@@ -256,6 +280,22 @@ export default function DataImportPage() {
         <Card>
           <CardContent className="p-6">
             <div className="flex items-center gap-4">
+              <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-cyan/10">
+                <Activity className="h-6 w-6 text-cyan" />
+              </div>
+              <div>
+                <p className="text-sm text-muted-foreground">Transaction Records</p>
+                <p className="text-2xl font-bold tabular-nums">
+                  {stats?.dashboardRecordsCount || 0}
+                </p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardContent className="p-6">
+            <div className="flex items-center gap-4">
               <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-warning/10">
                 <ClipboardList className="h-6 w-6 text-warning" />
               </div>
@@ -278,7 +318,7 @@ export default function DataImportPage() {
               <Upload className="h-5 w-5 text-primary" />
               Upload CSV Reports
             </span>
-            {(stats?.gameMetricsCount || 0) + (stats?.redemptionsCount || 0) + (stats?.auditRecordsCount || 0) > 0 && (
+            {totalRecords > 0 && (
               <button
                 onClick={handleClearData}
                 className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-destructive/10 text-destructive hover:bg-destructive/20 text-sm font-medium transition-colors"
@@ -310,8 +350,9 @@ export default function DataImportPage() {
             <p className="text-lg font-medium mb-2">
               {isProcessing ? 'Processing...' : 'Drag & drop CSV files here'}
             </p>
-            <p className="text-sm text-muted-foreground mb-4">
-              Supported: Game Metric Report, Redemption Tickets Details, Master Audit Report
+            <p className="text-sm text-muted-foreground mb-4 text-center max-w-md">
+              Supported: Game Metric Report, Redemption Tickets Details, Master Audit Report, 
+              or Combined Dashboard Report (custom SQL export)
             </p>
             <label className="inline-flex items-center gap-2 px-4 py-2 rounded-lg bg-primary text-primary-foreground hover:bg-primary/90 cursor-pointer transition-colors font-medium">
               <FileSpreadsheet className="h-4 w-4" />
@@ -391,30 +432,30 @@ export default function DataImportPage() {
       {/* Instructions */}
       <Card className="border-border/50 bg-muted/20">
         <CardHeader>
-          <CardTitle className="text-base">How to Export Reports from Semnox</CardTitle>
+          <CardTitle className="text-base">How to Export Reports</CardTitle>
         </CardHeader>
-        <CardContent className="space-y-4 text-sm text-muted-foreground">
-          <div className="grid gap-4 md:grid-cols-3">
+        <CardContent className="space-y-6 text-sm text-muted-foreground">
+          <div className="grid gap-4 md:grid-cols-2">
             <div className="space-y-2">
               <p className="font-medium text-foreground flex items-center gap-2">
                 <Gamepad2 className="h-4 w-4 text-primary" />
-                Game Metric Report
+                Standard Semnox Reports
               </p>
-              <p>Navigate to Reports → Game Reports → Game Metric Report. Select date range and export as CSV.</p>
+              <ul className="list-disc list-inside space-y-1 ml-2">
+                <li>Game Metric Report → Reports → Game Reports</li>
+                <li>Redemption Tickets Details → Reports → Inventory</li>
+                <li>Master Audit Report → Reports → System</li>
+              </ul>
             </div>
             <div className="space-y-2">
               <p className="font-medium text-foreground flex items-center gap-2">
-                <Receipt className="h-4 w-4 text-success" />
-                Redemption Report
+                <Activity className="h-4 w-4 text-cyan" />
+                Combined Dashboard Report (Custom SQL)
               </p>
-              <p>Navigate to Reports → Inventory → Redemption Tickets Details Report. Select date range and export as CSV.</p>
-            </div>
-            <div className="space-y-2">
-              <p className="font-medium text-foreground flex items-center gap-2">
-                <ClipboardList className="h-4 w-4 text-warning" />
-                Audit Report
-              </p>
-              <p>Navigate to Reports → System → Master Audit Report. Select date range and export as CSV.</p>
+              <p>Run the combined SQL query from the Semnox web portal to export transactions and redemptions in a single file with these columns:</p>
+              <code className="block bg-muted p-2 rounded text-xs mt-2">
+                record_type, card_number, customer_name, timestamp, game_name, machine_name, credits_spent, tickets_earned, current_ticket_balance, redemption_id, gift_code, pos_name
+              </code>
             </div>
           </div>
         </CardContent>
@@ -422,4 +463,3 @@ export default function DataImportPage() {
     </div>
   );
 }
-

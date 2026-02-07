@@ -60,6 +60,23 @@ export interface AuditRecord {
   username: string;
 }
 
+// NEW: Combined Dashboard Report record
+export interface DashboardRecord {
+  recordType: 'TRANSACTION' | 'REDEMPTION';
+  cardNumber: string;
+  customerName: string;
+  timestamp: Date;
+  gameName: string;
+  machineName: string;
+  creditsSpent: number;
+  ticketsEarned: number;
+  currentTicketBalance: number;
+  currentCreditsBalance: number;
+  redemptionId: string;
+  giftCode: string;
+  posName: string;
+}
+
 // Parse the Semnox key-value CSV format
 function parseKeyValueRow(headers: string[], values: string[]): Record<string, string> {
   const result: Record<string, string> = {};
@@ -113,6 +130,63 @@ function parseDate(dateStr: string | undefined): Date {
   }
   
   return parsed;
+}
+
+// NEW: Parse Combined Dashboard Report CSV (simple columnar format)
+export function parseDashboardReport(csvContent: string): DashboardRecord[] {
+  const lines = csvContent.split('\n').filter(line => line.trim());
+  if (lines.length < 2) return [];
+  
+  const headers = parseCSVLine(lines[0]).map(h => h.trim().toLowerCase());
+  const results: DashboardRecord[] = [];
+  
+  // Map expected column names to indices
+  const colMap: Record<string, number> = {};
+  headers.forEach((h, i) => {
+    colMap[h] = i;
+  });
+  
+  // Check if this looks like a combined dashboard report
+  const hasRecordType = 'record_type' in colMap || 'recordtype' in colMap;
+  const hasCardNumber = 'card_number' in colMap || 'cardnumber' in colMap;
+  
+  if (!hasRecordType || !hasCardNumber) {
+    return []; // Not a combined dashboard report
+  }
+  
+  for (let i = 1; i < lines.length; i++) {
+    const values = parseCSVLine(lines[i]);
+    
+    const getValue = (keys: string[]): string => {
+      for (const key of keys) {
+        if (colMap[key] !== undefined && values[colMap[key]]) {
+          return values[colMap[key]].trim();
+        }
+      }
+      return '';
+    };
+    
+    const recordType = getValue(['record_type', 'recordtype']);
+    if (recordType !== 'TRANSACTION' && recordType !== 'REDEMPTION') continue;
+    
+    results.push({
+      recordType: recordType as 'TRANSACTION' | 'REDEMPTION',
+      cardNumber: getValue(['card_number', 'cardnumber']),
+      customerName: getValue(['customer_name', 'customername']),
+      timestamp: parseDate(getValue(['timestamp', 'trx_date', 'redemption_date'])),
+      gameName: getValue(['game_name', 'gamename']),
+      machineName: getValue(['machine_name', 'machinename']),
+      creditsSpent: parseNumber(getValue(['credits_spent', 'creditsspent', 'credits'])),
+      ticketsEarned: parseNumber(getValue(['tickets_earned', 'ticketsearned', 'tickets'])),
+      currentTicketBalance: parseNumber(getValue(['current_ticket_balance', 'currentticketbalance', 'ticket_count'])),
+      currentCreditsBalance: parseNumber(getValue(['current_credits_balance', 'currentcreditsbalance', 'credits_balance'])),
+      redemptionId: getValue(['redemption_id', 'redemptionid']),
+      giftCode: getValue(['gift_code', 'giftcode']),
+      posName: getValue(['pos_name', 'posname']),
+    });
+  }
+  
+  return results;
 }
 
 // Parse Game Metric Report CSV
@@ -357,3 +431,67 @@ export function aggregateGamePerformance(games: GameMetric[]): GamePerformanceSu
     .sort((a, b) => b.totalTickets - a.totalTickets);
 }
 
+// NEW: Aggregate dashboard records for velocity analysis
+export interface CardVelocitySummary {
+  cardNumber: string;
+  customerName: string;
+  totalTicketsEarned: number;
+  totalPlays: number;
+  currentBalance: number;
+  firstTransaction: Date;
+  lastTransaction: Date;
+  timeSpanMinutes: number;
+  ticketsPerMinute: number;
+  gamesPlayed: string[];
+}
+
+export function aggregateCardVelocity(records: DashboardRecord[]): CardVelocitySummary[] {
+  const transactions = records.filter(r => r.recordType === 'TRANSACTION' && r.ticketsEarned > 0);
+  const cardMap = new Map<string, CardVelocitySummary>();
+  
+  for (const t of transactions) {
+    if (!t.cardNumber) continue;
+    
+    const existing = cardMap.get(t.cardNumber);
+    
+    if (existing) {
+      existing.totalTicketsEarned += t.ticketsEarned;
+      existing.totalPlays += 1;
+      existing.currentBalance = Math.max(existing.currentBalance, t.currentTicketBalance);
+      
+      if (t.timestamp < existing.firstTransaction) {
+        existing.firstTransaction = t.timestamp;
+      }
+      if (t.timestamp > existing.lastTransaction) {
+        existing.lastTransaction = t.timestamp;
+      }
+      
+      if (t.gameName && !existing.gamesPlayed.includes(t.gameName)) {
+        existing.gamesPlayed.push(t.gameName);
+      }
+    } else {
+      cardMap.set(t.cardNumber, {
+        cardNumber: t.cardNumber,
+        customerName: t.customerName || `Card ${t.cardNumber.slice(-4)}`,
+        totalTicketsEarned: t.ticketsEarned,
+        totalPlays: 1,
+        currentBalance: t.currentTicketBalance,
+        firstTransaction: t.timestamp,
+        lastTransaction: t.timestamp,
+        timeSpanMinutes: 0,
+        ticketsPerMinute: 0,
+        gamesPlayed: t.gameName ? [t.gameName] : [],
+      });
+    }
+  }
+  
+  // Calculate velocity metrics
+  const results = Array.from(cardMap.values()).map(card => {
+    const timeSpan = (card.lastTransaction.getTime() - card.firstTransaction.getTime()) / (1000 * 60);
+    card.timeSpanMinutes = Math.max(1, Math.round(timeSpan)); // Minimum 1 minute
+    card.ticketsPerMinute = card.totalTicketsEarned / card.timeSpanMinutes;
+    return card;
+  });
+  
+  return results.sort((a, b) => b.ticketsPerMinute - a.ticketsPerMinute);
+}

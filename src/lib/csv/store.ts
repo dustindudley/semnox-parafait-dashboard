@@ -5,19 +5,23 @@ import type {
   GameMetric,
   RedemptionDetail,
   AuditRecord,
+  DashboardRecord,
   CardRedemptionSummary,
   GamePerformanceSummary,
+  CardVelocitySummary,
 } from './parsers';
 
 import {
   aggregateRedemptionsByCard,
   aggregateGamePerformance,
+  aggregateCardVelocity,
 } from './parsers';
 
 const STORAGE_KEYS = {
   GAME_METRICS: 'semnox_game_metrics',
   REDEMPTIONS: 'semnox_redemptions',
   AUDIT_RECORDS: 'semnox_audit_records',
+  DASHBOARD_RECORDS: 'semnox_dashboard_records',
   LAST_IMPORT: 'semnox_last_import',
 };
 
@@ -25,6 +29,7 @@ export interface ImportedData {
   gameMetrics: GameMetric[];
   redemptions: RedemptionDetail[];
   auditRecords: AuditRecord[];
+  dashboardRecords: DashboardRecord[];
   lastImport: Date | null;
 }
 
@@ -32,6 +37,7 @@ export interface DataStoreStats {
   gameMetricsCount: number;
   redemptionsCount: number;
   auditRecordsCount: number;
+  dashboardRecordsCount: number;
   lastImport: Date | null;
 }
 
@@ -60,6 +66,16 @@ export function saveAuditRecords(data: AuditRecord[]): void {
     dateOfLog: d.dateOfLog.toISOString(),
   }));
   localStorage.setItem(STORAGE_KEYS.AUDIT_RECORDS, JSON.stringify(serialized));
+  updateLastImport();
+}
+
+export function saveDashboardRecords(data: DashboardRecord[]): void {
+  if (typeof window === 'undefined') return;
+  const serialized = data.map(d => ({
+    ...d,
+    timestamp: d.timestamp.toISOString(),
+  }));
+  localStorage.setItem(STORAGE_KEYS.DASHBOARD_RECORDS, JSON.stringify(serialized));
   updateLastImport();
 }
 
@@ -111,6 +127,21 @@ export function loadAuditRecords(): AuditRecord[] {
   }
 }
 
+export function loadDashboardRecords(): DashboardRecord[] {
+  if (typeof window === 'undefined') return [];
+  const stored = localStorage.getItem(STORAGE_KEYS.DASHBOARD_RECORDS);
+  if (!stored) return [];
+  try {
+    const parsed = JSON.parse(stored);
+    return parsed.map((d: any) => ({
+      ...d,
+      timestamp: new Date(d.timestamp),
+    }));
+  } catch {
+    return [];
+  }
+}
+
 export function getLastImport(): Date | null {
   if (typeof window === 'undefined') return null;
   const stored = localStorage.getItem(STORAGE_KEYS.LAST_IMPORT);
@@ -124,6 +155,7 @@ export function loadAllData(): ImportedData {
     gameMetrics: loadGameMetrics(),
     redemptions: loadRedemptions(),
     auditRecords: loadAuditRecords(),
+    dashboardRecords: loadDashboardRecords(),
     lastImport: getLastImport(),
   };
 }
@@ -134,6 +166,7 @@ export function getDataStoreStats(): DataStoreStats {
     gameMetricsCount: loadGameMetrics().length,
     redemptionsCount: loadRedemptions().length,
     auditRecordsCount: loadAuditRecords().length,
+    dashboardRecordsCount: loadDashboardRecords().length,
     lastImport: getLastImport(),
   };
 }
@@ -144,6 +177,7 @@ export function clearAllData(): void {
   localStorage.removeItem(STORAGE_KEYS.GAME_METRICS);
   localStorage.removeItem(STORAGE_KEYS.REDEMPTIONS);
   localStorage.removeItem(STORAGE_KEYS.AUDIT_RECORDS);
+  localStorage.removeItem(STORAGE_KEYS.DASHBOARD_RECORDS);
   localStorage.removeItem(STORAGE_KEYS.LAST_IMPORT);
 }
 
@@ -158,9 +192,19 @@ export function getGameSummaries(): GamePerformanceSummary[] {
   return aggregateGamePerformance(games);
 }
 
+// NEW: Get velocity summaries from combined dashboard records
+export function getVelocitySummaries(): CardVelocitySummary[] {
+  const records = loadDashboardRecords();
+  return aggregateCardVelocity(records);
+}
+
 // Check if data has been imported
 export function hasImportedData(): boolean {
   const stats = getDataStoreStats();
-  return stats.gameMetricsCount > 0 || stats.redemptionsCount > 0 || stats.auditRecordsCount > 0;
+  return (
+    stats.gameMetricsCount > 0 || 
+    stats.redemptionsCount > 0 || 
+    stats.auditRecordsCount > 0 ||
+    stats.dashboardRecordsCount > 0
+  );
 }
-
