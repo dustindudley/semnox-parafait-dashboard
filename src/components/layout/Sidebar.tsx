@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { cn } from '@/lib/utils';
@@ -15,6 +16,12 @@ import {
 } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
+import {
+  hasImportedData,
+  getGameSummaries,
+  getCardSummaries,
+  loadRedemptions,
+} from '@/lib/csv/store';
 
 interface NavItem {
   name: string;
@@ -24,53 +31,85 @@ interface NavItem {
   badgeVariant?: 'default' | 'destructive' | 'warning';
 }
 
-const mainNavItems: NavItem[] = [
-  {
-    name: 'Overview',
-    href: '/',
-    icon: LayoutDashboard,
-  },
-  {
-    name: 'Fraud Detection',
-    href: '/fraud-detection',
-    icon: Shield,
-    badge: 3,
-    badgeVariant: 'destructive',
-  },
-  {
-    name: 'Redemption Logs',
-    href: '/redemption-logs',
-    icon: Receipt,
-  },
-];
-
-const secondaryNavItems: NavItem[] = [
-  {
-    name: 'Data Import',
-    href: '/data-import',
-    icon: Upload,
-  },
-  {
-    name: 'Analytics',
-    href: '/analytics',
-    icon: TrendingUp,
-  },
-  {
-    name: 'Alerts',
-    href: '/alerts',
-    icon: Bell,
-    badge: 5,
-    badgeVariant: 'warning',
-  },
-  {
-    name: 'Settings',
-    href: '/settings',
-    icon: Settings,
-  },
-];
+// Thresholds for counting alerts
+const THRESHOLDS = {
+  TICKETS_PER_PLAY_WARNING: 50,
+  HIGH_REDEMPTION_WARNING: 2000,
+};
 
 export function Sidebar() {
   const pathname = usePathname();
+  const [alertCounts, setAlertCounts] = useState({
+    fraudAlerts: 0,
+    totalAlerts: 0,
+    hasData: false,
+  });
+
+  useEffect(() => {
+    // Calculate alert counts from imported data
+    const dataExists = hasImportedData();
+    
+    if (dataExists) {
+      const games = getGameSummaries();
+      const cards = getCardSummaries();
+      
+      // Count suspicious games
+      const suspiciousGames = games.filter(g => g.avgTicketsPerPlay >= THRESHOLDS.TICKETS_PER_PLAY_WARNING).length;
+      
+      // Count high-redemption cards
+      const highRedemptionCards = cards.filter(c => c.totalTicketsRedeemed >= THRESHOLDS.HIGH_REDEMPTION_WARNING).length;
+      
+      setAlertCounts({
+        fraudAlerts: suspiciousGames + highRedemptionCards,
+        totalAlerts: suspiciousGames + highRedemptionCards,
+        hasData: true,
+      });
+    } else {
+      setAlertCounts({
+        fraudAlerts: 0,
+        totalAlerts: 0,
+        hasData: false,
+      });
+    }
+  }, [pathname]); // Re-check when navigating
+
+  const mainNavItems: NavItem[] = [
+    {
+      name: 'Overview',
+      href: '/',
+      icon: LayoutDashboard,
+    },
+    {
+      name: 'Fraud Detection',
+      href: '/fraud-detection',
+      icon: Shield,
+      badge: alertCounts.fraudAlerts > 0 ? alertCounts.fraudAlerts : undefined,
+      badgeVariant: 'destructive',
+    },
+    {
+      name: 'Redemption Logs',
+      href: '/redemption-logs',
+      icon: Receipt,
+    },
+  ];
+
+  const secondaryNavItems: NavItem[] = [
+    {
+      name: 'Data Import',
+      href: '/data-import',
+      icon: Upload,
+    },
+    {
+      name: 'Analytics',
+      href: '/analytics',
+      icon: TrendingUp,
+    },
+    {
+      name: 'Settings',
+      href: '/settings',
+      icon: Settings,
+    },
+  ];
 
   return (
     <aside className="flex h-screen w-64 flex-col bg-sidebar border-r border-sidebar-border">
@@ -112,7 +151,7 @@ export function Sidebar() {
                 )}
               />
               <span className="flex-1">{item.name}</span>
-              {item.badge && (
+              {item.badge !== undefined && item.badge > 0 && (
                 <Badge
                   variant={item.badgeVariant === 'destructive' ? 'destructive' : 'secondary'}
                   className={cn(
@@ -155,20 +194,19 @@ export function Sidebar() {
                 )}
               />
               <span className="flex-1">{item.name}</span>
-              {item.badge && (
-                <Badge
-                  variant="secondary"
-                  className={cn(
-                    'h-5 min-w-5 px-1.5 text-xs font-semibold',
-                    item.badgeVariant === 'warning' && 'bg-warning/20 text-warning'
-                  )}
-                >
-                  {item.badge}
-                </Badge>
-              )}
             </Link>
           );
         })}
+        
+        {/* Data Status Indicator */}
+        {!alertCounts.hasData && (
+          <div className="mt-4 mx-3 p-3 rounded-lg bg-warning/10 border border-warning/20">
+            <p className="text-xs text-warning font-medium">No data imported</p>
+            <p className="text-xs text-muted-foreground mt-1">
+              Import CSV reports to see analytics
+            </p>
+          </div>
+        )}
       </nav>
 
       {/* Footer */}
@@ -187,4 +225,3 @@ export function Sidebar() {
     </aside>
   );
 }
-
